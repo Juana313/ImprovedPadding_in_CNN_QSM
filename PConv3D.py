@@ -67,14 +67,20 @@ class PConv3D(Conv3D):
         if type(inputs) is not list or len(inputs) != 2:
             raise Exception('PartialConvolution2D must be called on a list of two tensors [img, mask]. Instead got: ' + str(inputs))
         
-        images_pad = K.conv3d(inputs[0], self.image_mask, padding='same',
+        # first padding the input and mask
+        paddings = tf.constant([[0,0], [0,0], [1,1,], [1,1], [1,1]])
+        inputs0 = tf.pad(inputs[0], paddings, mode='CONSTANT', constant_values=0)
+        inputs1 = tf.pad(inputs[1], paddings, mode='CONSTANT', constant_values=0)
+    
+        # apply [[1,1,1],[1,1,1],[1,1,1]] convolution to each feature map of the input
+        images_pad = K.conv3d(inputs0, self.image_mask, padding='same',
                               strides=self.strides,
                               dilation_rate=self.dilation_rate,
                               data_format=self.data_format)
         
 
         # Apply convolutions to mask
-        mask_output = K.conv3d(inputs[1], self.kernel_mask, 
+        mask_output = K.conv3d(inputs1, self.kernel_mask, 
                                strides=self.strides,
                                padding='same',
                                data_format=self.data_format,
@@ -86,10 +92,9 @@ class PConv3D(Conv3D):
         # Clip output to be between 0 and 1
         mask_output = K.clip(mask_output, 0, 1)
 
-        
-        images_pad = inputs[0]*inputs[1] + (mask_output - inputs[1])*images_pad*mask_ratio
+        # within the mask, using the original value, around the boundary, using the avarage value of valid pixels
+        images_pad = inputs0*inputs1 + (mask_output - inputs1)*images_pad*mask_ratio
 
-        
             
         # Apply convolutions to image
         img_output = K.conv3d(images_pad, self.kernel, 
@@ -109,12 +114,12 @@ class PConv3D(Conv3D):
         if self.activation is not None:
             img_output = self.activation(img_output)
             
-        return img_output*inputs[1][:,:,1:-1,1:-1,1:-1]
+        return img_output*inputs[1]
     
     
     def compute_output_shape(self, input_shape):
         if self.data_format == 'channels_last':
-            space = input_shape[0][1:-1]
+            space = input_shape[0]
             new_space = []
             for i in range(len(space)):
                 new_dim = conv_utils.conv_output_length(
@@ -125,7 +130,6 @@ class PConv3D(Conv3D):
                     dilation=self.dilation_rate[i])
                 new_space.append(new_dim)
             new_shape = (input_shape[0][0],) + tuple(new_space) + (self.filters,)
-            mask_shape = (input_shape[0][0],) + tuple(new_space) + (1,)
             return [new_shape]
         if self.data_format == 'channels_first':
             space = input_shape[2:]
@@ -139,5 +143,4 @@ class PConv3D(Conv3D):
                     dilation=self.dilation_rate[i])
                 new_space.append(new_dim)
             new_shape = (input_shape[0], self.filters) + tuple(new_space)
-            mask_shape = (input_shape[0], 1) + tuple(new_space)
             return [new_shape]
